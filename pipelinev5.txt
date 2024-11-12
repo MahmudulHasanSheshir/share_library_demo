@@ -1,0 +1,157 @@
+pipeline {
+  agent any
+  options {
+    buildDiscarder logRotator(daysToKeepStr: '1', numToKeepStr: '7')
+  }
+  tools {
+    maven "maven-3.9.3"
+  }
+  
+  parameters {
+    choice(
+      choices: ['main', 'sheshir'],
+      description: 'Select the branch to clone',
+      name: 'BRANCH'
+    )
+    booleanParam(
+      defaultValue: true,
+      description: 'Start from the beginning of the pipeline or from "Remove existing pods" stage',
+      name: 'START_FROM_1st_STAGE'
+    )
+  }
+
+  stages {
+    stage('Pre-build') {
+      steps {
+        slackSend channel: '#automation', color: '#88c007',
+                  message: "Pipeline starting: ${currentBuild.fullDisplayName}"
+      }
+    }
+
+    stage('Source Code Pulling') {
+      when {
+        expression { params.START_FROM_1st_STAGE == true }
+      }
+      steps {
+        git branch: params.BRANCH, credentialsId: 'gittu', url: 'git@github.com:MahmudulHasanSheshir/YSD_B02_DevOps_Library_Management_System.git'
+      }
+    }
+
+    stage('Apply configuration'){
+      steps{
+        sh "sed -i 's|spring.datasource.username = .*|spring.datasource.username = sheshir|g' src/main/resources/application.properties"
+        sh "sed -i 's|spring.datasource.password = .*|spring.datasource.password = sheshir|g' src/main/resources/application.properties"
+      }
+    }
+    stage('Parallel Stages') {
+      when {
+        expression { params.START_FROM_1st_STAGE == true }
+      }
+    parallel {
+      stage('Build Artifact') {
+        steps {
+          sh 'mvn clean install'
+        }
+      }
+      stage('SonarQube Analysis') {
+        steps {
+          withCredentials([string(credentialsId: 'sonarqube', variable: 'SONARQUBE_TOKEN')]) {
+            withSonarQubeEnv('sonarqube') {
+              script {
+                sh "mvn sonar:sonar -Dsonar.projectKey=jenkins -Dsonar.host.url=http://192.168.20.178:9000 -Dsonar.login=${SONARQUBE_TOKEN}"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+    stage('Build and Dockerize') {
+      when {
+        expression { params.START_FROM_1st_STAGE == true }
+      }
+      steps {
+        withDockerRegistry(credentialsId: 'docker', url:'') {
+          script {
+            def imageName = 'mahmudulhasansheshir/spark'
+            def dockerfile = 'Dockerfile'
+            def buildNumber = env.BUILD_NUMBER ?: '1'
+            def imageTag = "V-${buildNumber}"
+
+            sh "docker build -t ${imageName}:${imageTag} -f ${dockerfile} ."
+            sh "docker push ${imageName}:${imageTag}"
+            sh " docker tag ${imageName}:${imageTag} ${imageName}:latest "
+            sh "docker push ${imageName}:latest"
+          }
+        }
+      }
+    }
+
+    stage('Remove existing pods') {
+      when {
+        expression { params.START_FROM_1st_STAGE == true }
+      }
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+        sh "kubectl delete -f mysql-service.yaml"
+        sh "kubectl delete -f mysql-deployment.yaml"
+        sh "kubectl delete -f mysql-pvc.yaml"
+        sh "kubectl delete -f mysql-pv.yaml"
+        sh "kubectl delete -f mysql-secret.yaml"
+        sh "kubectl delete -f sparklms-service.yaml"
+        sh "kubectl delete -f sparklms-deployment.yaml"
+      }
+      }
+    }
+
+
+    stage('Deploy MySQL pod') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+          sh "kubectl apply -f mysql-secret.yaml"
+          sh "kubectl apply -f mysql-pv.yaml"
+          sh "kubectl apply -f mysql-pvc.yaml"
+          sh "kubectl apply -f mysql-deployment.yaml"
+          sh "kubectl apply -f mysql-service.yaml && sleep 15s"
+        }
+      }
+    }
+    
+    stage('Deploy Application pod') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+          sh "kubectl apply -f sparklms-deployment.yaml"
+          sh "kubectl apply -f sparklms-service.yaml && sleep 2s"
+          sh "kubectl get services -n sheshir-namespace"
+        }
+      }
+    }
+    stage('Rollback on failure') {
+  when {
+    expression { currentBuild.result == 'FAILURE' }
+  }
+  steps {
+    withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+      sh "kubectl rollout undo deployment/sparklms-deployment"
+    }
+  }
+}
+  }
+post {
+  always {
+        // Clean up the workspace after the pipeline execution
+        cleanWs()
+  }
+  success {
+    slackSend channel: '#automation', color: 'good',
+              message: "On-premise pipeline Build successful: ${currentBuild.fullDisplayName}"
+        }
+  failure {
+            
+    slackSend channel: '#automation', color: '#danger',
+              message: "On-premise pipeline Build fail: ${currentBuild.fullDisplayName}"
+        }
+}
+  
+  
+}

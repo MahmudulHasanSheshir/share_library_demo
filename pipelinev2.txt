@@ -1,0 +1,88 @@
+pipeline {
+  agent any
+  tools {
+    maven "maven-3.9.3"
+    }
+    
+  triggers {
+    pollSCM('*/2 * * * *')
+  }
+
+  stages {
+    stage('source code pulling') {
+      steps {
+        git branch: 'main', credentialsId: 'gittu', url: 'git@github.com:MahmudulHasanSheshir/YSD_B02_DevOps_Library_Management_System.git'
+      }
+    }
+    stage('Build Artifact') {
+      steps {
+        sh 'mvn clean install'
+      }
+    }
+    stage('Build and Dockerize') {
+      steps {
+        // Build your Java artifact here using Maven or any other build tool
+
+        // Docker build and tag the image
+        script {
+          def imageName = 'mahmudulhasansheshir/spark'
+          def imageTag = 'latest'
+          def dockerfile = 'Dockerfile'
+
+          sh "docker build -t ${imageName}:${imageTag} -f ${dockerfile} ."
+          
+        }
+      }
+    }
+    stage('Push Image') {
+      steps {
+        withDockerRegistry(credentialsId: 'docker', url:'')   {
+          sh "docker push mahmudulhasansheshir/spark:latest"
+        }
+      }
+    }
+    
+    stage('Remove existing pods') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+          sh "kubectl delete -f mysql-service.yaml"
+          sh "kubectl delete -f mysql-deployment.yaml"
+          sh "kubectl delete -f mysql-pvc.yaml"
+          sh "kubectl delete -f mysql-pv.yaml"
+          sh "kubectl delete -f mysql-secret.yaml"
+          sh "kubectl delete -f sparklms-service.yaml"
+          sh "kubectl delete -f sparklms-deployment.yaml"
+        }
+      }
+    }
+    
+    stage('Deploy MySQL pod') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+          sh "kubectl apply -f mysql-secret.yaml"
+          sh "kubectl apply -f mysql-pv.yaml"
+          sh "kubectl apply -f mysql-pvc.yaml"
+          sh "kubectl apply -f mysql-deployment.yaml"
+          sh "kubectl apply -f mysql-service.yaml && sleep 15s"
+        }
+      }
+    }
+    
+    stage('Deploy Application pod') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+          sh "kubectl apply -f sparklms-deployment.yaml"
+          sh "kubectl apply -f sparklms-service.yaml"
+          
+        }
+      }
+    }
+    
+    post{
+        always {
+            // Clean up the workspace after the pipeline execution
+            cleanWs()
+        }
+    }
+  }
+}

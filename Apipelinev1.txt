@@ -1,0 +1,64 @@
+pipeline {
+    agent any
+    options {
+    buildDiscarder logRotator(daysToKeepStr: '1', numToKeepStr: '7')
+  }
+   
+    tools{
+        maven 'maven-3.9.3'
+    }
+    stages {
+        stage('Pull Source Code') {
+            steps {
+                git branch: 'main', credentialsId: 'gittu', url: 'git@github.com:MahmudulHasanSheshir/YSD_B02_DevOps_Library_Management_System.git'
+            }
+        }
+        
+        stage('Configure application'){
+            steps {
+                sh "sed -i 's|mysql-service:3306/sparklmsdb|bravo-rds.cjldgoxvvwoc.us-west-2.rds.amazonaws.com:3306/sheshir|g' src/main/resources/application.properties"
+                sh "sed -i 's|spring.datasource.username = .*|spring.datasource.username = sheshir|g' src/main/resources/application.properties"
+                sh "sed -i 's|spring.datasource.password = .*|spring.datasource.password = sheshir|g' src/main/resources/application.properties"
+
+            }
+        }
+        stage('Build Artifact'){
+            steps {
+                sh 'mvn clean install'
+            }
+        }
+        stage('Create a JAVA-restart service'){
+            steps{
+                ansiblePlaybook become: true, credentialsId: '1234', disableHostKeyChecking: true, installation: 'ansible', inventory: 'inventory', playbook: 'ansible-java-service.yaml'
+            }
+        }
+        stage('Stop previous service'){
+            steps {
+                sshPublisher(publishers: [sshPublisherDesc(configName: 'aws', transfers: [sshTransfer(cleanRemote: false, excludes: '', execCommand: 'pkill java || true', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: '', remoteDirectorySDF: false, removePrefix: '', sourceFiles: '')], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: false)])
+            }
+        }
+        
+        stage('Deploy in AWS'){
+            steps {
+                sshPublisher(publishers: [sshPublisherDesc(configName: 'aws', transfers: [sshTransfer(cleanRemote: false, excludes: '', execCommand: 'java -jar spark-lms-0.0.1-SNAPSHOT.jar &> /dev/null &', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: '', remoteDirectorySDF: false, removePrefix: 'target/', sourceFiles: 'target/*.jar')], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: false)])
+            }
+        }
+}
+    post {
+      //always {
+        // Clean up the workspace after the pipeline execution
+        //cleanWs()
+      //}
+    success {
+            // Slack notification for successful build
+            slackSend channel: '#automation', color: 'good',
+                      message: "AWS pipeline Build successful: ${currentBuild.fullDisplayName}"
+        }
+        failure {
+            // Slack notification for failed build
+            slackSend channel: '#automation', color: 'danger',
+                      message: "Build failed: ${currentBuild.fullDisplayName}"
+        }
+    }
+    
+}

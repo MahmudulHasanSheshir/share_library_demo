@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sparklms
+  namespace: sheshir-namespace
+spec:
+  selector:
+    matchLabels:
+      app: sparklms
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: sparklms
+    spec:
+      containers:
+        - name: sparklms
+          image: mahmudulhasansheshir/spark:${TAG_NAME}
+          ports:
+            - containerPort: 8080
+
+
+
+
+
+
+
+pipeline {
+  agent any
+
+  tools {
+    maven "maven-3.9.3"
+  }
+    
+  parameters {
+    choice(
+      choices: ['main', 'sheshir'],
+      description: 'Select the branch to clone',
+      name: 'BRANCH'
+    )
+    booleanParam(
+      defaultValue: true,
+      description: 'Start from the beginning of the pipeline or from "Remove existing pods" stage',
+      name: 'START_FROM_STAGE'
+    )
+  }
+
+  stages {
+    stage('Source Code Pulling') {
+      when {
+        expression { params.START_FROM_STAGE == true }
+      }
+      steps {
+        git branch: params.BRANCH, credentialsId: 'gittu', url: 'git@github.com:MahmudulHasanSheshir/YSD_B02_DevOps_Library_Management_System.git'
+      }
+    }
+
+    stage('Build Artifact') {
+      steps {
+        sh 'mvn clean install'
+      }
+    }
+    
+    stage('Build and Dockerize') {
+      steps {
+        script {
+          def imageName = 'mahmudulhasansheshir/spark'
+          def dockerfile = 'Dockerfile'
+          def buildNumber = env.BUILD_NUMBER ?: '1'
+          def imageTag = "${33 + Integer.parseInt(buildNumber)}"
+
+          sh "docker build -t ${imageName}:${imageTag} -f ${dockerfile} ."
+          sh "docker push ${imageName}:${imageTag}"
+          env.TAG_NAME = imageTag
+        }
+      }
+    }
+    
+    stage('Remove existing pods') {
+      when {
+        expression { params.START_FROM_STAGE == false }
+      }
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+          sh "kubectl delete -f mysql-service.yaml"
+          sh "kubectl delete -f mysql-deployment.yaml"
+          sh "kubectl delete -f mysql-pvc.yaml"
+          sh "kubectl delete -f mysql-pv.yaml"
+          sh "kubectl delete -f mysql-secret.yaml"
+          sh "kubectl delete -f sparklms-service.yaml"
+          sh "kubectl delete -f sparklms-deployment.yaml"
+        }
+      }
+    }
+    
+    stage('Deploy MySQL pod') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+          sh "kubectl apply -f mysql-secret.yaml"
+          sh "kubectl apply -f mysql-pv.yaml"
+          sh "kubectl apply -f mysql-pvc.yaml"
+          sh "kubectl apply -f mysql-deployment.yaml"
+          sh "kubectl apply -f mysql-service.yaml && sleep 15s"
+        }
+      }
+    }
+    
+    stage('Deploy Application pod') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-cred', namespace: '', serverUrl: '']]) {
+          sh "sed -i 's/\${TAG_NAME}/${env.TAG_NAME}/g' sparklms-deployment.yaml"
+          sh "kubectl apply -f sparklms-deployment.yaml"
+          sh "kubectl apply -f sparklms-service.yaml"
+        }
+      }
+    }
+    
+    post {
+      always {
+        // Clean up the workspace after the pipeline execution
+        cleanWs()
+      }
+    }
+  }
+}
