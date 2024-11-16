@@ -1,0 +1,110 @@
+pipeline {
+  agent any
+  options {
+    buildDiscarder logRotator(daysToKeepStr: '1', numToKeepStr: '7')
+  }
+  tools {
+    maven "maven-3.9.3"
+  }
+
+  stages {
+    stage('Source Code Pulling') {
+      steps {
+        git branch: 'main', credentialsId: 'github', url: 'https://github.com/MahmudulHasanSheshir/share_library_demo.git'
+      }
+    }
+
+    /*stage('Apply configuration') {
+      steps {
+        sh "sed -i 's|spring.datasource.username = .*|spring.datasource.username = sheshir|g' src/main/resources/application.properties"
+        sh "sed -i 's|spring.datasource.password = .*|spring.datasource.password = sheshir|g' src/main/resources/application.properties"
+      }
+    }
+
+    stage('Parallel Stages') {
+      parallel {
+        stage('Build Artifact') {
+          steps {
+            sh 'mvn clean install'
+          }
+        }
+
+        stage('Build and Dockerize') {
+          steps {
+            withDockerRegistry(credentialsId: '123', url:'') {
+              script {
+                def imageName = 'mahmudulhasansheshir/spark'
+                def dockerfile = 'build-dockerfile'
+                def buildNumber = env.BUILD_NUMBER ?: '1'
+                def imageTag = "V-${buildNumber}"
+
+                sh "docker build -t ${imageName}:${imageTag} -f ${dockerfile} ."
+                sh "docker push ${imageName}:${imageTag}"
+                sh "docker tag ${imageName}:${imageTag} ${imageName}:latest"
+                sh "docker push ${imageName}:latest"
+              }
+            }
+          }
+        }
+      }
+    }
+    */
+    
+    stage('Build and Dockerize') {
+          steps {
+            withDockerRegistry(credentialsId: '123', url:'') {
+              script {
+                def imageName = 'mahmudulhasansheshir/spark'
+                def dockerfile = 'build-dockerfile'
+                def buildNumber = env.BUILD_NUMBER ?: '1'
+                def imageTag = "V-${buildNumber}"
+
+                sh "docker build -t ${imageName}:${imageTag} -f ${dockerfile} ."
+                sh "docker push ${imageName}:${imageTag}"
+                sh "docker tag ${imageName}:${imageTag} ${imageName}:latest"
+                sh "docker push ${imageName}:latest"
+              }
+            }
+          }
+        }
+    stage('Deploy MySQL pod') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-secret1', namespace: '', serverUrl: '']]) {
+          sh "microk8s kubectl apply -f mysql-secret.yaml"
+          sh "microk8s kubectl apply -f mysql-pv.yaml"
+          sh "microk8s kubectl apply -f mysql-pvc.yaml"
+          sh "microk8s kubectl apply -f mysql-deployment.yaml"
+          sh "microk8s kubectl apply -f mysql-service.yaml && sleep 15s"
+        }
+      }
+    }
+
+    stage('Deploy Application pod') {
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-secret1', namespace: '', serverUrl: '']]) {
+          sh "microk8s kubectl apply -f sparklms-deployment.yaml"
+          sh "microk8s kubectl apply -f sparklms-service.yaml && sleep 2s"
+          sh "microk8s kubectl get services -n sheshir-namespace"
+        }
+      }
+    }
+
+    stage('Rollback on failure') {
+      when {
+        expression { currentBuild.result == 'FAILURE' }
+      }
+      steps {
+        withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: '', contextName: '', credentialsId: 'kube-secret1', namespace: '', serverUrl: '']]) {
+          sh "microk8s kubectl rollout undo deployment/sparklms-deployment"
+        }
+      }
+    }
+  }
+  
+  post {
+    always {
+      // Clean up the workspace after the pipeline execution
+      cleanWs()
+    }
+  }
+}
