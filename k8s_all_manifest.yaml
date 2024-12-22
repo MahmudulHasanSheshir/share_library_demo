@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sparklms
+  name: spark
   namespace: {variable1}
 spec:
   selector:
@@ -11,10 +11,10 @@ spec:
   template:
     metadata:
       labels:
-        app: sparklms
+        app: spark
     spec:
       containers:
-        - name: sparklms
+        - name: spark
           image: mahmudulhasansheshir/{application}:latest
           ports:
             - containerPort: 8080
