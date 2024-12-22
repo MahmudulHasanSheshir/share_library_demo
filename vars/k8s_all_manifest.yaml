@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sparklms
+  namespace: {variable1}
+spec:
+  selector:
+    matchLabels:
+      app: {application}
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: sparklms
+    spec:
+      containers:
+        - name: sparklms
+          image: mahmudulhasansheshir/{application}:latest
+          ports:
+            - containerPort: 8080
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: {variable1}
+spec:
+  selector:
+    matchLabels:
+      app: {database}
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: {database}
+    spec:
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+      containers:
+        - name: {database}
+          image: {database}:latest
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: mysql-root-password
+            - name: MYSQL_USER
+              value: sheshir
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: mysql-password
+            - name: MYSQL_DATABASE
+              value: sparklmsdb
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
